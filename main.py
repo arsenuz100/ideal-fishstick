@@ -86,8 +86,13 @@ def generate():
 @app.route("/webhook", methods=["POST"])
 async def webhook():
     """Обработчик для Telegram Webhook."""
-    update = Update.de_json(request.get_json(), app.bot)
+    update = Update.de_json(request.get_json(), application.bot)  # Используем глобальную application
     await handle_message(update, None)  # Передаём None как context
+    return "OK", 200
+
+@app.route("/healthz")
+def health_check():
+    """Обработчик для проверки состояния сервиса."""
     return "OK", 200
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -117,9 +122,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Не удалось определить язык сообщения.")
 
 def main():
+    global application  # Делаем application глобальной для доступа в webhook
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.bot = application.bot  # Сохраняем bot для использования в webhook
     logger.info("Бот запущен...")
     application.run_polling()
 
