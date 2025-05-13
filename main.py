@@ -3,7 +3,6 @@ import re
 import requests
 import base64
 import os
-import uuid
 from flask import Flask, request, jsonify
 from together import Together
 from telegram import Update, InputFile
@@ -13,14 +12,10 @@ from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTyp
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-TELEGRAM_BOT_TOKEN = "7052813240:AAFoNqx7MpQp4J1nqQKBmYebemTG5JrJYP0"
-TOGETHER_API_KEY = "c4a7bc8a7e01f6e7a301d05cb7a265debf98c77755f70b33db7c288326946e9b"
+# Получение токенов из переменных окружения
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TOGETHER_API_KEY = os.getenv("TOGETHER_API_KEY")
 IMAGE_GEN_API_URL = "https://api-inference.huggingface.co/models/XLabs-AI/flux-RealismLora"
-
-# Папка для сохранения изображений
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-IMAGE_DIR = os.path.join(BASE_DIR, "poto")
-os.makedirs(IMAGE_DIR, exist_ok=True)
 
 client = Together(api_key=TOGETHER_API_KEY)
 app = Flask(__name__)
@@ -62,22 +57,17 @@ def generate_image(prompt):
         response = client.images.generate(
             prompt=prompt,
             model="black-forest-labs/FLUX.1-schnell-Free",
-            width=1792,  # Full HD ширина
-            height=1792,  # Исправлено на кратное 16
+            width=1792,
+            height=1792,
             steps=4,
             n=1,
             response_format="b64_json",
         )
-
         if response and response.data and response.data[0].b64_json:
             image_data = base64.b64decode(response.data[0].b64_json)
-            image_path = os.path.join(IMAGE_DIR, f"output_{uuid.uuid4().hex}.jpg")
-            with open(image_path, "wb") as f:
-                f.write(image_data)
-            return image_path
+            return image_data  # Возвращаем данные, а не путь
     except Exception as e:
         logger.error(f"Ошибка генерации изображения: {e}")
-    
     return None
 
 @app.route("/generate", methods=["POST"])
@@ -88,10 +78,17 @@ def generate():
     if not prompt:
         return jsonify({"error": "No prompt provided"}), 400
     
-    image_path = generate_image(prompt)
-    if image_path:
-        return jsonify({"image_path": image_path})
+    image_data = generate_image(prompt)
+    if image_data:
+        return jsonify({"status": "Image generated"})
     return jsonify({"error": "Image generation failed"}), 500
+
+@app.route("/webhook", methods=["POST"])
+async def webhook():
+    """Обработчик для Telegram Webhook."""
+    update = Update.de_json(request.get_json(), app.bot)
+    await handle_message(update, None)  # Передаём None как context
+    return "OK", 200
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_message = update.message.text.strip()
@@ -108,10 +105,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif user_message.startswith(".") or user_message.startswith("/"):  # Генерация изображения
         prompt = user_message[1:].strip()
         logger.info(f"Запрос на генерацию изображения: {prompt}")
-        image_path = generate_image(prompt)
-        if image_path:
-            with open(image_path, "rb") as f:
-                await update.message.reply_photo(photo=f)
+        image_data = generate_image(prompt)
+        if image_data:
+            await update.message.reply_photo(photo=InputFile(image_data, filename="generated_image.jpg"))
             logger.info("Изображение успешно сгенерировано и отправлено пользователю.")
         else:
             logger.error("Ошибка генерации изображения. Ответ не отправлен.")
@@ -123,11 +119,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.bot = application.bot  # Сохраняем bot для использования в webhook
     logger.info("Бот запущен...")
     application.run_polling()
 
 if __name__ == "__main__":
-    from threading import Thread
-    flask_thread = Thread(target=app.run, kwargs={"host": "0.0.0.0", "port": 5000, "debug": True})
-    flask_thread.start()
     main()
